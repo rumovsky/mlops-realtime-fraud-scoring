@@ -66,7 +66,7 @@ services:
       KAFKA_OUTPUT_TOPIC: scoring
 
   streamlit:
-    build: .
+    build: ./interface
     depends_on:
       kafka-setup:
         condition: service_completed_successfully
