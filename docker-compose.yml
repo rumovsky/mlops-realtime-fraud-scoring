@@ -55,6 +55,18 @@ services:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: fraud
+      POSTGRES_USER: fraud
+      POSTGRES_PASSWORD: fraud
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fraud -d fraud"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   fraud_detector:
     build: ./fraud_detector
     depends_on:
@@ -65,13 +77,27 @@ services:
       KAFKA_INPUT_TOPIC: transactions
       KAFKA_OUTPUT_TOPIC: scoring
 
+  results_writer:
+    build: ./results_writer
+    depends_on:
+      kafka-setup:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER: kafka:9092
+      POSTGRES_DSN: postgresql://fraud:fraud@postgres:5432/fraud
+
   streamlit:
     build: ./interface
     depends_on:
       kafka-setup:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     environment:
       KAFKA_BROKER: kafka:9092
       KAFKA_TOPIC: transactions
+      POSTGRES_DSN: postgresql://fraud:fraud@postgres:5432/fraud
     ports:
       - "8501:8501"

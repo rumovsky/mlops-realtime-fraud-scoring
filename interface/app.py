@@ -6,15 +6,60 @@ import uuid
 
 import streamlit as st
 from kafka import KafkaProducer
+import psycopg
 
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "transactions")
+POSTGRES_DSN = os.getenv(
+    "POSTGRES_DSN",
+    "postgresql://fraud:fraud@postgres:5432/fraud",
+)
 
 
 st.set_page_config(page_title="Realtime fraud scoring", page_icon="✅")
 st.title("Realtime fraud scoring")
 st.write("Загрузите CSV и отправьте его строки отдельными сообщениями в Kafka.")
+
+if st.button("Посмотреть результаты"):
+    try:
+        with psycopg.connect(POSTGRES_DSN) as connection:
+            fraud_rows = connection.execute(
+                """
+                SELECT transaction_id, score, fraud_flag
+                FROM scores
+                WHERE fraud_flag = 1
+                ORDER BY created_at DESC
+                LIMIT 10
+                """
+            ).fetchall()
+            recent_scores = connection.execute(
+                """
+                SELECT score
+                FROM scores
+                ORDER BY created_at DESC
+                LIMIT 100
+                """
+            ).fetchall()
+        st.subheader("Последние fraud-транзакции")
+        st.dataframe(
+            [
+                {"transaction_id": row[0], "score": row[1], "fraud_flag": row[2]}
+                for row in fraud_rows
+            ],
+            use_container_width=True,
+        )
+        st.subheader("Распределение скоров")
+        counts = [0] * 10
+        for (score,) in recent_scores:
+            counts[min(int(score * 10), 9)] += 1
+        st.bar_chart(
+            {"score": [i / 10 + 0.05 for i in range(10)], "count": counts},
+            x="score",
+            y="count",
+        )
+    except Exception as error:
+        st.error(f"Не удалось получить результаты: {error}")
 
 uploaded_file = st.file_uploader("Загрузите CSV-файл", type=["csv"])
 
