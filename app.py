@@ -1,19 +1,75 @@
-import pandas as pd
+import csv
+import io
+import json
+import os
+import uuid
+
 import streamlit as st
+from kafka import KafkaProducer
+
+
+KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "transactions")
 
 
 st.set_page_config(page_title="Realtime fraud scoring", page_icon="✅")
 st.title("Realtime fraud scoring")
-st.write("Минимальный интерфейс для проверки загрузки CSV.")
+st.write("Загрузите CSV и отправьте его строки отдельными сообщениями в Kafka.")
 
 uploaded_file = st.file_uploader("Загрузите CSV-файл", type=["csv"])
 
 if uploaded_file is not None:
     try:
-        data = pd.read_csv(uploaded_file)
+        uploaded_file.seek(0)
+        text_stream = io.TextIOWrapper(uploaded_file, encoding="utf-8-sig", newline="")
+        reader = csv.DictReader(text_stream)
+        fieldnames = reader.fieldnames
+        preview = []
+        for row in reader:
+            preview.append(row)
+            if len(preview) == 10:
+                break
+        text_stream.detach()
     except Exception as error:
         st.error(f"Не удалось прочитать CSV: {error}")
     else:
         st.success("OK: CSV-файл успешно загружен.")
-        st.write(f"Строк: {len(data)}; столбцов: {len(data.columns)}")
-        st.dataframe(data.head(10), use_container_width=True)
+        if not fieldnames:
+            st.error("CSV-файл не содержит заголовка.")
+            st.stop()
+        st.write(f"Столбцов: {len(fieldnames)}")
+        st.dataframe(preview, use_container_width=True)
+
+        if st.button("Отправить строки в Kafka", type="primary"):
+            try:
+                producer = KafkaProducer(
+                    bootstrap_servers=KAFKA_BROKER,
+                    value_serializer=lambda value: json.dumps(value, ensure_ascii=False).encode("utf-8"),
+                )
+                uploaded_file.seek(0)
+                text_stream = io.TextIOWrapper(uploaded_file, encoding="utf-8-sig", newline="")
+                reader = csv.DictReader(text_stream)
+                sent_count = 0
+                status = st.empty()
+                for row in reader:
+                    row_data = {
+                        column: (None if value == "" else value)
+                        for column, value in row.items()
+                    }
+                    producer.send(
+                        KAFKA_TOPIC,
+                        value={
+                            "transaction_id": str(uuid.uuid4()),
+                            "data": row_data,
+                        },
+                    )
+                    sent_count += 1
+                    if sent_count % 1000 == 0:
+                        status.write(f"Подготовлено сообщений: {sent_count}")
+                text_stream.detach()
+                producer.flush()
+                producer.close()
+                status.write(f"Подготовлено сообщений: {sent_count}")
+                st.success(f"Отправлено сообщений: {sent_count}")
+            except Exception as error:
+                st.error(f"Не удалось отправить сообщения в Kafka: {error}")
